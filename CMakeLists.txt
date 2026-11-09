@@ -1,10 +1,11 @@
-# Модуль BreezeCAD: библиотека + module.json, упакованные в .bzmod.
+# BreezCONN — модуль BreezeCAD «Продолжить на устройстве» (ADR-0011):
+# библиотека bz-conn и module.json, упакованные в .bzmod.
 #
 #   cmake -B build -DCMAKE_BUILD_TYPE=Release
 #   cmake --build build --config Release
-#   ctest --test-dir build -C Release        # проверка загрузки без BreezeCAD
+#   ctest --test-dir build -C Release --output-on-failure
 #
-# Пакет: build/packages/bz-<id>-<version>-<system>-<arch>.bzmod — его ставят
+# Пакет: build/packages/bz-conn-<version>-<system>-<arch>.bzmod — его ставят
 # в BreezeCAD через «Настройки → Модули → Установить модуль…».
 # id, version и имя библиотеки берутся из module.json — правьте только его.
 cmake_minimum_required(VERSION 3.21)
@@ -16,22 +17,49 @@ string(JSON BZ_LIBRARY GET "${BZ_MANIFEST}" library)
 
 project(bz_module_${BZ_ID} VERSION ${BZ_VERSION} LANGUAGES C CXX)
 
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 # Модуль лежит не рядом с программой: среда выполнения C/C++ — внутри библиотеки.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+find_package(Threads REQUIRED)
 
+if(MSVC)   # те же предупреждения, что у BreezeCAD (cmake/CompilerWarnings.cmake)
+    set(BZ_WARNINGS /W4 /permissive- /utf-8)
+else()
+    set(BZ_WARNINGS -Wall -Wextra -Wpedantic -Wshadow -Wnon-virtual-dtor -Wold-style-cast -Wcast-align
+                    -Woverloaded-virtual -Wconversion -Wsign-conversion -Wnull-dereference -Wno-unused-parameter)
+endif()
+
+# --- Сторонние библиотеки (third_party/README.md) ------------------------------
+add_library(bz_json INTERFACE)
+target_include_directories(bz_json SYSTEM INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nlohmann)
+add_library(bz_monocypher STATIC third_party/monocypher/monocypher.c)
+target_include_directories(bz_monocypher SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/monocypher)
+add_library(bz_qrcodegen STATIC third_party/qrcodegen/qrcodegen.cpp)
+target_include_directories(bz_qrcodegen SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/qrcodegen)
+
+# --- Работа модуля без таблицы программы (её же гоняют тесты) --------------------
+add_library(bz_conn_core STATIC src/Seal.cpp src/Net.cpp src/Conn.cpp)
+target_include_directories(bz_conn_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/sdk)
+target_link_libraries(bz_conn_core PUBLIC bz_json bz_monocypher bz_qrcodegen Threads::Threads)
+target_compile_options(bz_conn_core PRIVATE ${BZ_WARNINGS})
+if(WIN32)
+    target_link_libraries(bz_conn_core PUBLIC ws2_32)
+endif()
+
+# --- Библиотека модуля -----------------------------------------------------------
 set(BZ_STAGE ${PROJECT_BINARY_DIR}/stage/${BZ_ID})
-
-# --- Библиотека модуля -------------------------------------------------------
-add_library(module SHARED src/module.c)   # свои файлы — сюда (можно .cpp)
-target_include_directories(module PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/sdk)
+add_library(module SHARED src/ConnModule.cpp)
+target_link_libraries(module PRIVATE bz_conn_core)
+target_compile_options(module PRIVATE ${BZ_WARNINGS})
 set_target_properties(module PROPERTIES
     OUTPUT_NAME ${BZ_LIBRARY}
     C_VISIBILITY_PRESET hidden
     CXX_VISIBILITY_PRESET hidden
-    CXX_STANDARD 20
     LIBRARY_OUTPUT_DIRECTORY ${BZ_STAGE}
     RUNTIME_OUTPUT_DIRECTORY ${BZ_STAGE}
     ARCHIVE_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/lib)   # import-библиотека Windows — не в пакет
@@ -43,6 +71,7 @@ if(WIN32)
     set_target_properties(module PROPERTIES PREFIX "")   # <library>.dll — так ищет BreezeCAD
     if(MINGW)
         target_link_options(module PRIVATE -static)
+        target_sources(module PRIVATE src/MingwCompat.c)   # см. комментарий в файле
     endif()
 endif()
 if(APPLE)
@@ -82,12 +111,16 @@ add_custom_target(package_bzmod ALL DEPENDS ${BZ_PACKAGE})
 # --- Проверка без BreezeCAD ---------------------------------------------------
 include(CTest)
 if(BUILD_TESTING)
-    add_executable(smoke tests/smoke.c)
+    add_executable(smoke tests/smoke.c)   # загрузка, как в программе; старая таблица без окон
     target_include_directories(smoke PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/sdk)
     target_link_libraries(smoke PRIVATE ${CMAKE_DL_LIBS})
     add_dependencies(smoke module)
     add_test(NAME module_loads COMMAND smoke $<TARGET_FILE:module>)
-    add_executable(panel tests/panel.c)                # sdk/bz_panel.h: JSON окон модуля
-    target_include_directories(panel PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/sdk)
-    add_test(NAME panel_json COMMAND panel)
+
+    add_executable(bz_conn_tests tests/main.cpp tests/ConnTests.cpp)
+    target_include_directories(bz_conn_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party/doctest)
+    target_link_libraries(bz_conn_tests PRIVATE bz_conn_core ${CMAKE_DL_LIBS})
+    add_dependencies(bz_conn_tests module)
+    target_compile_definitions(bz_conn_tests PRIVATE BZ_CONN_MODULE="$<TARGET_FILE:module>")
+    add_test(NAME conn COMMAND bz_conn_tests)
 endif()

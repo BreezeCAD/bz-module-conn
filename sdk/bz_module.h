@@ -37,6 +37,11 @@ extern "C" {
 
 #define BZ_MODULE_ABI_VERSION 1u
 
+/* This header has module windows: menu items and panels (add_action ...
+ * on_panel_event). Same ABI version: the fields are appended, an older
+ * host simply has a shorter table (check with BZ_HAS). */
+#define BZ_MODULE_PANELS 1
+
 #if defined(_WIN32)
 #define BZ_MODULE_EXPORT __declspec(dllexport)
 #else
@@ -110,6 +115,45 @@ typedef struct BzHostApi {
     /* The user's settings folder of BreezeCAD (UTF-8, '/' separators); a
      * module keeps its own files in a subfolder named after its id. */
     const char* (*config_dir)(void);
+
+    /* --- module windows (BZ_MODULE_PANELS); main thread only ------------
+     * The module's texts are shown as given (the module translates them).
+     * Ids are the module's own: the host keeps them apart per module. */
+
+    /* A command of the module in the File menu, the command search (Ctrl+K)
+     * and, with "ribbon", on the ribbon:
+     *   {"id": "start", "label": "Продолжить на устройстве",
+     *    "tooltip": "...", "icon": "export", "menu": "file",
+     *    "ribbon": {"tab": "model", "group": "BreezCONN"}}
+     * Ribbon tab: "model" (the «3D-модель» tab of a part and of an assembly),
+     * "part" or "assembly" only; the group goes at the end of it.
+     * The same id again replaces the item. Choosing it calls on_action(id).
+     * BZ_EARGUMENT: not JSON, or no id / label. */
+    int32_t (*add_action)(const char* action_json);
+    /* Greys an item out (0) or back (1). BZ_ENOTFOUND: no such item. */
+    int32_t (*enable_action)(const char* id, int32_t enabled);
+    /* Shows a panel, or redraws it with the same id (the host keeps no
+     * state of its own: send the whole panel each time):
+     *   {"id": "send", "title": "Продолжить на устройстве", "badge": "BreezCONN",
+     *    "width": 440, "items": [
+     *      {"type": "text", "text": "...", "secondary": 1},
+     *      {"type": "mono", "text": "192.168.1.5:50213"},
+     *      {"type": "note", "text": "...", "icon": "ui-info"},
+     *      {"type": "status", "text": "Жду устройство…", "busy": 1},
+     *      {"type": "link", "id": "help", "label": "Как это работает"},
+     *      {"type": "button", "id": "copy", "label": "...", "style": "link"},
+     *      {"type": "bitmap", "modules": ["1010...", ...], "size": 220},
+     *      {"type": "image", "png": "<base64>", "width": 200},
+     *      {"type": "choice", "id": "f1", "label": "Вал.bzc", "preview": "<path>",
+     *       "options": ["С устройства", "Своё", "Оба"], "value": 0},
+     *      {"type": "buttons", "items": [{"id": "ok", "label": "Применить",
+     *       "style": "primary", "key": "Enter"}, ...]}]}
+     * sdk/bz_panel.h of the module template writes it. A redraw keeps what the
+     * user chose unless the module sends another "value".
+     * BZ_EARGUMENT: not JSON or no id. */
+    int32_t (*show_panel)(const char* panel_json);
+    /* Closes a panel (no event). BZ_ENOTFOUND: not shown. */
+    int32_t (*close_panel)(const char* id);
 } BzHostApi;
 
 /* Is `field` of a table there? (A table from an older build is shorter.)
@@ -143,6 +187,16 @@ typedef struct BzModuleApi {
 
     /* Main thread, after the module (or any module) called request_main(). */
     void (*main_tick)(void);
+
+    /* --- module windows (BZ_MODULE_PANELS) ------------------------------- */
+
+    /* Main thread: the user chose the module's item `id` (add_action). */
+    void (*on_action)(const char* id);
+    /* Main thread: something happened in a panel of the module:
+     *   {"panel": "send", "id": "ok", "values": {"f1": 0}}
+     * id: the button or link pressed; "close" when the user closed the panel
+     * (Esc, the cross; the panel is gone then). values: every choice. */
+    void (*on_panel_event)(const char* event_json);
 } BzModuleApi;
 
 /* The one symbol every module exports. */
