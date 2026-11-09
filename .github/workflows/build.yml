@@ -1,9 +1,6 @@
-# Сборка модуля под Windows, Linux и macOS + проверка загрузки.
+# Сборка BreezCONN под Windows, Linux и macOS + тесты (как у bz-module-mcp: C++20).
 # Выпуск: на GitHub Releases → Draft a new release, тег vX.Y.Z (= "version" в
 # module.json) → Publish; сборка сама приложит к нему пакеты .bzmod.
-#
-# Закрытые репозитории: минуты macOS у GitHub дорогие, поэтому macOS
-# собирается только по тегу выпуска. В открытых — на каждый push.
 name: build
 
 on:
@@ -18,57 +15,81 @@ permissions:
   contents: read
 
 jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        # linux — в контейнере с glibc 2.28, как у BreezeCAD; macos — Apple Silicon.
-        include: ${{ fromJSON((github.event.repository.private && !startsWith(github.ref, 'refs/tags/')) && '[{"system":"linux","os":"ubuntu-latest","container":"almalinux:8"},{"system":"windows","os":"windows-latest","container":""}]' || '[{"system":"linux","os":"ubuntu-latest","container":"almalinux:8"},{"system":"windows","os":"windows-latest","container":""},{"system":"macos","os":"macos-15","container":""}]') }}
-    runs-on: ${{ matrix.os }}
-    container: ${{ matrix.container }}
+  windows:
+    # MSYS2 MinGW — тем же компилятором собирается BreezeCAD.
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
     steps:
-      - name: Tools (Linux container)
-        if: matrix.system == 'linux'
-        run: dnf install -y -q gcc gcc-c++ make cmake git
-
       - uses: actions/checkout@v4
-
-      - name: Configure
-        shell: bash
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0
-
-      - name: Build
-        run: cmake --build build --config Release
-
-      - name: Check that the module loads
-        run: ctest --test-dir build -C Release --output-on-failure
-
-      - uses: actions/upload-artifact@v4
+      - uses: msys2/setup-msys2@v2
         with:
-          name: bzmod-${{ matrix.system }}
-          path: build/packages/*.bzmod
-          if-no-files-found: error
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-python
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure --timeout 300
+      - uses: actions/upload-artifact@v4
+        with: { name: bzmod-windows, path: build/packages/*.bzmod, if-no-files-found: error }
+
+  linux:
+    # glibc 2.28, как у BreezeCAD: модуль работает и на старых дистрибутивах.
+    runs-on: ubuntu-latest
+    container: almalinux:8
+    steps:
+      - name: Tools
+        run: dnf install -y -q gcc-toolset-13-gcc-c++ make cmake git python3
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: |
+          source /opt/rh/gcc-toolset-13/enable
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: |
+          source /opt/rh/gcc-toolset-13/enable
+          cmake --build build -j4
+      - name: Test
+        run: ctest --test-dir build --output-on-failure --timeout 300
+      - uses: actions/upload-artifact@v4
+        with: { name: bzmod-linux, path: build/packages/*.bzmod, if-no-files-found: error }
+
+  macos:
+    runs-on: macos-15   # Apple Silicon
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0
+      - name: Build
+        run: cmake --build build -j4
+      - name: Test
+        run: ctest --test-dir build --output-on-failure --timeout 300
+      - uses: actions/upload-artifact@v4
+        with: { name: bzmod-macos, path: build/packages/*.bzmod, if-no-files-found: error }
 
   release:
     if: github.event_name == 'release'
-    needs: build
+    needs: [windows, linux, macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
-
       - name: Tag matches module.json
         run: |
           version=$(python3 -c "import json;print(json.load(open('module.json',encoding='utf-8'))['version'])")
           [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "::error::тег $GITHUB_REF_NAME, а в module.json версия $version"; exit 1; }
-
       - uses: actions/download-artifact@v4
         with: { pattern: bzmod-*, path: packages, merge-multiple: true }
-
       - name: Attach the packages to the release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          ls packages/*.bzmod
-          gh release upload "$GITHUB_REF_NAME" packages/*.bzmod --clobber
+        run: gh release upload "$GITHUB_REF_NAME" packages/*.bzmod --clobber

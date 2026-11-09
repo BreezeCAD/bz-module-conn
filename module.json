@@ -1,13 +1,13 @@
 {
-	"id": "example",
-	"name": "Пример модуля",
+	"id": "conn",
+	"name": "BreezCONN",
 	"version": "0.1.0",
-	"description": "Шаблон модуля BreezeCAD: пишет в журнал число компонентов открытой сборки. Замените описание на своё.",
+	"description": "Продолжить на устройстве: открытая деталь или сборка — на телефон или планшет по QR-коду в той же сети Wi-Fi, потом изменения обратно на компьютер. Без облака и интернета: компьютер слушает только локальную сеть и только пока открыто окно передачи, всё шифруется ключом из QR-кода.",
 	"abiVersion": 1,
-	"library": "bz-example",
+	"library": "bz-conn",
 	"enabledByDefault": false,
 	"requirements": {
 		"os": ["windows", "linux", "macos"],
-		"minHostVersion": "0.2.1"
+		"minHostVersion": "0.2.5"
 	}
 }
