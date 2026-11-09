@@ -1,0 +1,13 @@
+{
+	"id": "example",
+	"name": "Пример модуля",
+	"version": "0.1.0",
+	"description": "Шаблон модуля BreezeCAD: пишет в журнал число компонентов открытой сборки. Замените описание на своё.",
+	"abiVersion": 1,
+	"library": "bz-example",
+	"enabledByDefault": false,
+	"requirements": {
+		"os": ["windows", "linux", "macos"],
+		"minHostVersion": "0.2.1"
+	}
+}
